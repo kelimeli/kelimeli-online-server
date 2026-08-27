@@ -20,7 +20,9 @@ const {
   deactivatePlayer
 } = require("./matchEngine");
 
-const VERSION = "0.5.0";
+const VERSION = "0.7.0";
+const STARTED_AT = new Date().toISOString();
+const INSTANCE_ID = process.env.INSTANCE_ID?.trim() || crypto.randomBytes(4).toString("hex");
 const PORT = Number(process.env.PORT || 3000);
 const RECONNECT_GRACE_MS = Math.max(3000, Number(process.env.RECONNECT_GRACE_MS || 15000));
 const PUBLIC_COUNTDOWN_MS = Math.max(3000, Number(process.env.PUBLIC_COUNTDOWN_MS || 10000));
@@ -52,6 +54,8 @@ function applyCommonHeaders(res) {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Kelimeli-Server-Version", VERSION);
+  res.setHeader("X-Kelimeli-Instance", INSTANCE_ID);
 }
 function sendJson(res, status, payload) {
   applyCommonHeaders(res); res.statusCode = status;
@@ -103,12 +107,16 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     if (req.method === "OPTIONS") { applyCommonHeaders(res); res.statusCode = 204; res.end(); return; }
     if (req.method === "GET" && url.pathname === "/") { sendJson(res, 200, { ok: true, service: "kelimeli-online", version: VERSION, testPage: "/test" }); return; }
-    if (req.method === "GET" && url.pathname === "/health") {
+    if (req.method === "GET" && (url.pathname === "/health" || url.pathname === "/ready")) {
       sendJson(res, 200, {
         ok: true,
+        ready: true,
         service: "kelimeli-online",
         version: VERSION,
+        instanceId: INSTANCE_ID,
+        startedAt: STARTED_AT,
         uptimeSeconds: Math.floor(process.uptime()),
+        sessionSecretPersistent: !EPHEMERAL_SECRET,
         words: WORDS.length,
         rules: { fixedWordCount: 5, fixedDurationSec: 200 },
         powerups: {
@@ -132,7 +140,19 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] }, transports: ["websocket", "polling"] });
+const io = new Server(server, {
+  cors: { origin: "*", methods: ["GET", "POST"] },
+  transports: ["websocket", "polling"],
+  serveClient: true,
+  pingInterval: 25000,
+  pingTimeout: 20000,
+  connectTimeout: 10000,
+  maxHttpBufferSize: 1e6
+});
+
+io.engine.on("connection_error", error => {
+  console.warn(`[kelimeli-online] engine connection_error code=${error?.code ?? "?"} message=${error?.message ?? "unknown"}`);
+});
 function ackOk(ack, data = {}) { if (typeof ack === "function") ack({ ok: true, ...data }); }
 function ackError(ack, error) {
   const payload = error instanceof RoomError
@@ -304,6 +324,7 @@ io.use((socket, next) => {
 
 io.on("connection", socket => {
   const playerId = socket.data.playerId; const playerName = socket.data.playerName;
+  console.log(`[kelimeli-online] socket connected id=${socket.id} player=${playerId}`);
   clearDisconnectTimer(playerId);
   const previousSocketId = playerSockets.get(playerId);
   if (previousSocketId && previousSocketId !== socket.id) io.sockets.sockets.get(previousSocketId)?.disconnect(true);
@@ -327,6 +348,7 @@ io.on("connection", socket => {
 
   socket.on("room:create-private", (payload, ack) => {
     try {
+      console.log(`[kelimeli-online] room:create-private player=${playerId}`);
       const oldRoomId = rooms.getPlayerRoomId(playerId);
       const room = rooms.createPrivateRoom(
         { id: playerId, name: playerName, socketId: socket.id },
@@ -336,17 +358,18 @@ io.on("connection", socket => {
       if (oldRoomId && oldRoomId !== room.id) socket.leave(oldRoomId);
       socket.join(room.id); emitRoomState(room); emitFixedRooms();
       ackOk(ack, { room: rooms.serializeRoom(room), code: room.code });
-    } catch (error) { ackError(ack, error); }
+    } catch (error) { console.warn(`[kelimeli-online] room:create-private failed player=${playerId} error=${error?.message || error}`); ackError(ack, error); }
   });
 
   socket.on("room:join", (payload, ack) => {
     try {
+      console.log(`[kelimeli-online] room:join player=${playerId} target=${String(payload?.roomId || payload?.code || "")}`);
       const oldRoomId = rooms.getPlayerRoomId(playerId);
       const room = rooms.joinRoom(payload?.roomId || payload?.code, { id: playerId, name: playerName, socketId: socket.id });
       if (oldRoomId && oldRoomId !== room.id) socket.leave(oldRoomId);
       socket.join(room.id); emitRoomState(room); emitFixedRooms();
       ackOk(ack, { room: rooms.serializeRoom(room) });
-    } catch (error) { ackError(ack, error); }
+    } catch (error) { console.warn(`[kelimeli-online] room:join failed player=${playerId} error=${error?.message || error}`); ackError(ack, error); }
   });
 
   socket.on("room:leave", ack => {
@@ -470,7 +493,8 @@ io.on("connection", socket => {
     } catch (error) { ackError(ack, error); }
   });
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", reason => {
+    console.log(`[kelimeli-online] socket disconnected id=${socket.id} player=${playerId} reason=${reason || "unknown"}`);
     if (playerSockets.get(playerId) === socket.id) playerSockets.delete(playerId);
     const room = rooms.markDisconnected(playerId);
     if (!room) return;
@@ -496,12 +520,28 @@ io.on("connection", socket => {
   });
 });
 
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
+server.requestTimeout = 15000;
+
 function startServer() {
   return server.listen(PORT, "0.0.0.0", () => {
     console.log(`[kelimeli-online] v${VERSION} listening on :${PORT}`);
+    console.log(`[kelimeli-online] instance=${INSTANCE_ID} started=${STARTED_AT}`);
     console.log(`[kelimeli-online] words=${WORDS.length} fixed=5x200s reconnect=${RECONNECT_GRACE_MS}ms`);
     if (EPHEMERAL_SECRET) console.warn("[kelimeli-online] SESSION_SECRET yok; yeniden başlatmada oturum tokenları yenilenir.");
   });
 }
-if (require.main === module) startServer();
+if (require.main === module) {
+  const runningServer = startServer();
+  const shutdown = signal => {
+    console.log(`[kelimeli-online] ${signal} received; shutting down`);
+    io.close(() => {
+      runningServer.close(() => process.exit(0));
+      setTimeout(() => process.exit(0), 5000).unref();
+    });
+  };
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  process.once("SIGINT", () => shutdown("SIGINT"));
+}
 module.exports = { startServer };

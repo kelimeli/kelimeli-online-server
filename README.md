@@ -1,61 +1,52 @@
-# Kelimeli Online Server v0.5
+# Kelimeli Online Server v0.7.0
 
-Kelimeli Karşılaşma modu için gerçek zamanlı Node.js + Socket.IO sunucusu.
+App Store Review 2.1(a) için sağlamlaştırılmış Kelimeli online sunucusu.
 
-## v0.5
+## Bu sürümde
 
-- Bire Bir, Çoklu ve Özel Oda akışları
-- 6 haneli özel oda kodu
-- Sunucu tarafında ortak kelime ve Wordle değerlendirmesi
-- Çok turlu maç, hazır sistemi, geri sayım, puan ve sıralama
-- Reconnect desteği
-- **Online Harf Alayım**: `match:hint` olayı sunucuda bilinmeyen bir konumu seçer; cevap bütünü istemciye açılmaz. Maliyet bilgisi: **1 altın**.
-- **Online Yanlışımı Sil**: `match:undo` son yanlış tahmini sunucuda geri alır ve deneme hakkını iade eder. Maliyet bilgisi: **3 altın**.
-- `match:self-state`, yeniden bağlanınca daha önce alınmış harf ipuçlarını da geri döndürür.
-- `/health` artık desteklenen jokerleri ve maliyetlerini bildirir.
+- `/health` ve `/ready` endpointleri sunucunun gerçekten ayakta olduğunu doğrular.
+- Health cevabı `version`, `instanceId`, `startedAt`, `uptimeSeconds` ve `sessionSecretPersistent` alanlarını içerir.
+- Socket.IO polling + WebSocket desteği devam eder.
+- Engine.IO bağlantı hataları ile özel oda oluşturma/katılma işlemleri sunucu loglarına yazılır.
+- Proxy/uzun bağlantılar için HTTP keep-alive ve header timeout değerleri ayarlanmıştır.
+- SIGTERM/SIGINT sırasında düzgün kapanış eklenmiştir.
+- `SESSION_SECRET` hâlâ verilmezse sunucu çalışır; fakat production'da MUTLAKA sabit bir secret verilmelidir.
 
-> Not: Oyuncunun mevcut altın bakiyesi şu an iOS uygulamasındaki yerel Kelimeli ekonomisinde tutuluyor. Sunucu jokerin oyun durumunu otoriter biçimde yönetir; altın düşümü uygulama tarafında, başarılı ACK sonrasında yapılır. Hesap tabanlı kalıcı ekonomi geldiğinde bakiye kontrolü sunucuya taşınabilir.
+## Dokploy için zorunlu ayarlar
 
-## Socket olayları
+- Tek replica kullanın: **1 replica**. Oda durumu RAM'de tutulduğu için birden fazla replica kullanmayın.
+- Container port: **3000**.
+- Restart policy: **Always** veya **Unless stopped**.
+- Health path: **/health**.
+- HTTPS açık olmalı.
+- Production environment içine `SESSION_SECRET` ekleyin. Örnek üretim: `openssl rand -hex 32`.
 
-### Harf ipucu
+## Deploy sonrası kontrol
 
-İstemci:
+Aşağıdaki adres tarayıcıda açılmalı:
 
-```js
-socket.emit("match:hint", {}, ack => { ... });
-```
+`https://SUNUCU-ADRESIN/health`
 
-Başarılı ACK örneği:
+Beklenen temel cevap:
 
 ```json
 {
   "ok": true,
-  "position": 2,
-  "letter": "l",
-  "hints": [{ "position": 2, "letter": "l" }],
-  "cost": 1
+  "ready": true,
+  "service": "kelimeli-online",
+  "version": "0.7.0",
+  "sessionSecretPersistent": true
 }
 ```
 
-### Son yanlış tahmini geri alma
+`sessionSecretPersistent` false ise Dokploy Environment bölümünde `SESSION_SECRET` eksiktir.
 
-İstemci:
+Ardından:
 
-```js
-socket.emit("match:undo", {}, ack => { ... });
-```
+`https://SUNUCU-ADRESIN/test`
 
-Başarılı ACK içinde `removed`, kalan `guesses`, yeni `attempt` ve `cost: 3` döner. Doğru tahmin, pes edilmiş tur veya bitmiş tur geri alınamaz.
+sayfasını açıp iki ayrı tarayıcı/cihazla özel oda oluşturma ve oda koduyla katılma testi yapın.
 
-## Deploy
+## App Store için domain
 
-Mevcut GitHub reposunun köküne bu ZIP içindeki dosyaları yükle/değiştir ve commit et. Dokploy'da **Deploy** kullan.
-
-Container portu: `3000`.
-
-Deploy sonrası:
-
-- `/health` içinde `version: "0.5.0"` görünmeli.
-- `powerups.hint.enabled` ve `powerups.undo.enabled` `true` olmalı.
-- Tarayıcıdan `/test` açıp iki oyuncuyla Harf Alayım ve Yanlışımı Sil akışlarını test edebilirsin.
+Eski `sslip.io` adresi teknik olarak çalışabilir; ancak App Review'da sunucuya erişilememe sorunu tekrarlandığı için production'da sabit bir alan adı/subdomain kullanılması önerilir (ör. `online.senin-domainin.com`). Domain Dokploy'da aynı uygulamanın 3000 portuna yönlendirilmelidir.
