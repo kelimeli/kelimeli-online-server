@@ -2,10 +2,8 @@ const crypto = require("crypto");
 
 const FIXED_RULES = Object.freeze({ wordCount: 5, durationSec: 200 });
 const FIXED_ROOMS = [
-  { id: "PUBLIC-1", type: "public", name: "Online Oda 1", maxPlayers: 4 },
-  { id: "PUBLIC-2", type: "public", name: "Online Oda 2", maxPlayers: 4 },
-  { id: "DUEL-1", type: "duel", name: "Birebir Oda 1", maxPlayers: 2 },
-  { id: "DUEL-2", type: "duel", name: "Birebir Oda 2", maxPlayers: 2 }
+  ...Array.from({ length: 10 }, (_, i) => ({ id: `PUBLIC-${i + 1}`, type: "public", name: `Online Oda ${i + 1}`, maxPlayers: 4 })),
+  ...Array.from({ length: 40 }, (_, i) => ({ id: `DUEL-${i + 1}`, type: "duel", name: `Birebir Oda ${i + 1}`, maxPlayers: 2 }))
 ];
 
 const PRIVATE_WORD_COUNTS = new Set([3, 5, 7, 10]);
