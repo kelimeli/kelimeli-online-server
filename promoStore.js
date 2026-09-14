@@ -11,10 +11,11 @@ class PromoStore {
     this.hashes = new Set(hashes);
   }
   redeem(code, claimKey) {
-    if (typeof code !== 'string' || !/^[ABCDEFGHIJKLMNOPRSTUVYZabcdefghijklmnoprstuvyz]{10}$/.test(code) || !/^[a-f0-9]{64}$/.test(claimKey || '')) {
+    const canonicalCode = typeof code === 'string' ? code.toUpperCase() : '';
+    if (!/^[ABCDEFGHIJKLMNOPRSTUVYZ]{10}$/.test(canonicalCode) || !/^[a-f0-9]{64}$/.test(claimKey || '')) {
       return { ok: false, error: 'INVALID_CODE' };
     }
-    const hash = digest(code);
+    const hash = digest(canonicalCode);
     if (!this.hashes.has(hash)) return { ok: false, error: 'INVALID_CODE' };
     const owner = digest(claimKey);
     this.db.prepare('INSERT OR IGNORE INTO claims(code_hash,owner_hash,claimed_at) VALUES(?,?,?)').run(hash, owner, new Date().toISOString());
