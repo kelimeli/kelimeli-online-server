@@ -20,7 +20,16 @@ const {
   deactivatePlayer
 } = require("./matchEngine");
 
-const VERSION = "0.7.0";
+const VERSION = "0.8.0";
+const { PromoStore } = require("./promoStore");
+// Production requires an explicit persistent mount, never container-local fallback.
+const promoStore = process.env.PROMO_DATA_DIR
+  ? new PromoStore(path.join(process.env.PROMO_DATA_DIR, "promos.sqlite"), require("./promoHashes.json")) : null;
+const promoAttempts = new Map();
+const promoCleanup = setInterval(() => {
+  for (const [key, entry] of promoAttempts) if (entry.until <= Date.now()) promoAttempts.delete(key);
+}, 60000);
+promoCleanup.unref();
 const STARTED_AT = new Date().toISOString();
 const INSTANCE_ID = process.env.INSTANCE_ID?.trim() || crypto.randomBytes(4).toString("hex");
 const PORT = Number(process.env.PORT || 3000);
@@ -111,6 +120,7 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         ok: true,
         ready: true,
+        promosEnabled: !!promoStore,
         service: "kelimeli-online",
         version: VERSION,
         instanceId: INSTANCE_ID,
@@ -125,6 +135,17 @@ const server = http.createServer(async (req, res) => {
         },
         fixedRooms: rooms.listFixedRooms().map(r => ({ id: r.id, status: r.status, players: r.playerCount, maxPlayers: r.maxPlayers }))
       });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/promos/redeem") {
+      if (!promoStore) { sendJson(res, 503, { ok: false, error: "PROMOS_UNAVAILABLE" }); return; }
+      const key = req.socket.remoteAddress || "unknown";
+      let attempt = promoAttempts.get(key);
+      if (!attempt || attempt.until <= Date.now()) { attempt = { count: 0, until: Date.now() + 60000 }; promoAttempts.set(key, attempt); }
+      if (++attempt.count > 60) { sendJson(res, 429, { ok: false, error: "RATE_LIMIT" }); return; }
+      const body = await readJsonBody(req, 2048);
+      const result = promoStore.redeem(body.code, body.claimKey);
+      sendJson(res, result.ok ? 200 : result.error === "CODE_USED" ? 409 : 400, result);
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/rooms") { sendJson(res, 200, { ok: true, rooms: rooms.listFixedRooms() }); return; }

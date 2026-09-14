@@ -1,6 +1,6 @@
 {
   "name": "kelimeli-online-server",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "description": "Kelimeli gerçek zamanlı çok turlu karşılaşma sunucusu",
   "main": "server.js",
@@ -9,7 +9,7 @@
     "test": "node --test"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   },
   "dependencies": {
     "socket.io": "4.8.1"
